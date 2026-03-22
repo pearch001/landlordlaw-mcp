@@ -1,4 +1,4 @@
-# LandlordLaw MCP Server
+# g MCP Server
 
 **Instant, AI-queryable landlord-tenant law lookups with statute citations across 5 US states.**
 

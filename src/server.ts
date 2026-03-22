@@ -336,10 +336,10 @@ const OUTPUT_SCHEMAS = {
 };
 
 // CTX Protocol metadata for all tools
-const TOOL_META = {
-  surface: 'both',
+const TOOL_META_TEMPLATE = {
+  surface: 'both' as const,
   queryEligible: true,
-  latencyClass: 'instant',
+  latencyClass: 'instant' as const,
   pricing: {
     executeUsd: '0.001',
   },
@@ -349,6 +349,17 @@ const TOOL_META = {
     cooldownMs: 500,
     notes: 'Reads from local pre-built legal database. No external API calls.',
   },
+};
+
+const TOOL_META: Record<string, typeof TOOL_META_TEMPLATE> = {
+  get_deposit_rules: TOOL_META_TEMPLATE,
+  get_eviction_timeline: TOOL_META_TEMPLATE,
+  get_entry_requirements: TOOL_META_TEMPLATE,
+  get_late_fee_rules: TOOL_META_TEMPLATE,
+  get_rent_increase_rules: TOOL_META_TEMPLATE,
+  get_habitability_standards: TOOL_META_TEMPLATE,
+  get_lease_termination_rules: TOOL_META_TEMPLATE,
+  get_required_disclosures: TOOL_META_TEMPLATE,
 };
 
 function createServer(): McpServer {
@@ -374,10 +385,19 @@ function createServer(): McpServer {
   registerLeaseTerminationRules(server);
   registerRequiredDisclosures(server);
 
-  // TODO: Inject _meta and outputSchema via _registeredTools loop (CTX Protocol requirement)
-  // The _registeredTools API has changed in SDK 1.27.0
-  // For now, tools are registered without additional metadata injection
-  // CTX Protocol compliance may need to be updated for new SDK version
+  // Inject _meta and outputSchema via _registeredTools loop (CTX Protocol requirement)
+  const serverAny = server as any;
+  if (serverAny._registeredTools && typeof serverAny._registeredTools === 'object') {
+    for (const [name, tool] of Object.entries(serverAny._registeredTools)) {
+      if (tool && typeof tool === 'object') {
+        const meta = TOOL_META[name as keyof typeof TOOL_META];
+        if (meta) (tool as any)._meta = meta;
+
+        const outputSchema = OUTPUT_SCHEMAS[name as keyof typeof OUTPUT_SCHEMAS];
+        if (outputSchema) (tool as any).outputSchema = outputSchema;
+      }
+    }
+  }
 
   return server;
 }
