@@ -1,6 +1,7 @@
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { loadLegalData } from './ingestion.js';
 import { legalCache } from './cache.js';
@@ -413,26 +414,15 @@ async function main() {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Id');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, mcp-session-id, Accept');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
     next();
   });
 
-  // Create MCP server and transport (shared across all requests)
-  const server = createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    onsessioninitialized: (sessionId) => {
-      console.log(`Session initialized: ${sessionId}`);
-    },
-    onsessionclosed: (sessionId) => {
-      console.log(`Session closed: ${sessionId}`);
-    },
-  });
-
-  await server.connect(transport);
+  // Session management (per-request transport pattern)
+  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
 
   // Health endpoint
   app.get('/health', (req, res) => {
@@ -455,39 +445,50 @@ async function main() {
         jurisdictions_covered: jurisdictions.size,
         last_updated: legalCache.timestamp,
       },
+      sessions: sessions.size,
       uptime_seconds: process.uptime(),
     });
   });
 
-  // MCP endpoint - transport handles session management internally
+  // MCP endpoint with per-session transport
   app.post('/mcp', async (req, res) => {
-    try {
-      // Pass the pre-parsed body from express.json() middleware
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    // Existing session
+    if (sessionId && sessions.has(sessionId)) {
+      const { transport } = sessions.get(sessionId)!;
       await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error('Error handling MCP request:', error);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: 'Internal server error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
+      return;
+    }
+
+    // New session
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+    const server = createServer();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+
+    const newSessionId = res.getHeader('mcp-session-id') as string | undefined;
+    if (newSessionId) {
+      sessions.set(newSessionId, { transport, server });
+      transport.onclose = () => {
+        console.log(`Session closed: ${newSessionId}`);
+        sessions.delete(newSessionId);
+      };
+      console.log(`Session initialized: ${newSessionId}`);
     }
   });
 
-  // DELETE /mcp - handled by transport
+  // DELETE /mcp - close session
   app.delete('/mcp', async (req, res) => {
-    try {
-      // Pass the pre-parsed body from express.json() middleware
+    const sessionId = req.headers['mcp-session-id'] as string;
+    if (sessionId && sessions.has(sessionId)) {
+      const { transport } = sessions.get(sessionId)!;
       await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error('Error handling MCP DELETE request:', error);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: 'Internal server error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
+      sessions.delete(sessionId);
+    } else {
+      res.status(404).json({ error: 'Session not found' });
     }
   });
 
