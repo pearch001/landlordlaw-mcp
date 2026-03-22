@@ -442,7 +442,8 @@ async function main() {
   // MCP endpoint - transport handles session management internally
   app.post('/mcp', async (req, res) => {
     try {
-      await transport.handleRequest(req, res);
+      // Pass the pre-parsed body from express.json() middleware
+      await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('Error handling MCP request:', error);
       if (!res.headersSent) {
@@ -457,7 +458,8 @@ async function main() {
   // DELETE /mcp - handled by transport
   app.delete('/mcp', async (req, res) => {
     try {
-      await transport.handleRequest(req, res);
+      // Pass the pre-parsed body from express.json() middleware
+      await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('Error handling MCP DELETE request:', error);
       if (!res.headersSent) {
